@@ -7,3 +7,4 @@ assembly/__tests__/*.map
 .vscode
 .idea
 npm-debug.*
+package-lock.json

@@ -1,27 +1,24 @@
-import { itoa_buffered, dtoa_buffered } from "util/number";
+/// <reference path="../node_modules/assemblyscript/std/assembly/rt/index.d.ts" />
 
-const MIN_BUFFER_LEN = 32;
-const MIN_BUFFER_SIZE: u32 = MIN_BUFFER_LEN << 1;
-
-const NEW_LINE_CHAR: u16 = 0x0A; // \n
+const MIN_BUFFER_LEN = isDefined(MIN_AS_SINK_BUFFER_LENGTH) ? MIN_AS_SINK_BUFFER_LENGTH : 32;
 
 // @ts-ignore: decorator
 @inline function nextPowerOf2(n: u32): u32 {
   return 1 << 32 - clz(n - 1);
 }
 
-export class StringSink {
+export class ByteSink {
   protected buffer: ArrayBuffer;
   protected offset: u32 = 0;
 
-  static withCapacity(capacity: i32): StringSink {
-    return new StringSink("", capacity);
+  static withCapacity(capacity: i32): ByteSink {
+    return new ByteSink([], capacity);
   }
 
-  constructor(initial: string = "", capacity: i32 = MIN_BUFFER_LEN) {
-    var size = <u32>initial.length << 1;
+  constructor(initial: StaticArray<u8> = [], capacity: i32 = MIN_BUFFER_LEN) {
+    var size = <usize>initial.length;
     this.buffer = changetype<ArrayBuffer>(__new(
-      max<u32>(size, max<u32>(MIN_BUFFER_SIZE, <u32>capacity << 1)),
+      max<usize>(size, max<usize>(MIN_BUFFER_LEN, <usize>capacity)),
       idof<ArrayBuffer>())
     );
     if (size) {
@@ -35,14 +32,14 @@ export class StringSink {
   }
 
   get length(): i32 {
-    return this.offset >> 1;
+    return this.offset;
   }
 
   get capacity(): i32 {
-    return this.buffer.byteLength >>> 1;
+    return this.buffer.byteLength;
   }
 
-  write(src: string, start: i32 = 0, end: i32 = i32.MAX_VALUE): void {
+  write(src: StaticArray<u8>, start: i32 = 0, end: i32 = i32.MAX_VALUE): void {
     let len = src.length as u32;
 
     if (start != 0 || end != i32.MAX_VALUE) {
@@ -56,56 +53,16 @@ export class StringSink {
 
     if (!len) return;
 
-    let size = len << 1;
+    let size = len;
     this.ensureCapacity(size);
     let offset = this.offset;
 
     memory.copy(
       changetype<usize>(this.buffer) + offset,
-      changetype<usize>(src) + (<usize>start << 1),
+      changetype<usize>(src) + <usize>start,
       size
     );
     this.offset = offset + size;
-  }
-
-  writeLn(src: string = "", start: i32 = 0, end: i32 = i32.MAX_VALUE): void {
-    let len = src.length as u32;
-    if (start != 0 || end != i32.MAX_VALUE) {
-      let from: i32;
-      from  = min<i32>(max(start, 0), len);
-      end   = min<i32>(max(end,   0), len);
-      start = min<i32>(from, end);
-      end   = max<i32>(from, end);
-      len   = end - start;
-    }
-
-    let size = len << 1;
-    this.ensureCapacity(size + 2);
-    let offset = this.offset;
-    let dest = changetype<usize>(this.buffer) + offset;
-    if (size) memory.copy(dest, changetype<usize>(src) + (<usize>start << 1), size);
-    store<u16>(dest + size, NEW_LINE_CHAR);
-    this.offset = offset + (size + 2);
-  }
-
-  writeCodePoint(code: i32): void {
-    var hasSur = <u32>code > 0xFFFF;
-    this.ensureCapacity(2 << i32(hasSur));
-
-    let offset = this.offset;
-    let dest = changetype<usize>(this.buffer) + offset;
-
-    if (!hasSur) {
-      store<u16>(dest, <u16>code);
-      this.offset = offset + 2;
-    } else {
-      assert(<u32>code <= 0x10FFFF);
-      code -= 0x10000;
-      let hi = (code & 0x03FF) | 0xDC00;
-      let lo = code >>> 10 | 0xD800;
-      store<u32>(dest, lo | hi << 16);
-      this.offset = offset + 4;
-    }
   }
 
   writeNumber<T extends number>(value: T): void {
@@ -114,26 +71,19 @@ export class StringSink {
       let maxCapacity = 0;
       // this also include size for sign
       if (sizeof<T>() == 1) {
-        maxCapacity = 4 << 1;
+        maxCapacity = 4;
       } else if (sizeof<T>() == 2) {
-        maxCapacity = 6 << 1;
+        maxCapacity = 6;
       } else if (sizeof<T>() == 4) {
-        maxCapacity = 11 << 1;
+        maxCapacity = 11;
       } else if (sizeof<T>() == 8) {
-        maxCapacity = 21 << 1;
+        maxCapacity = 21;
       }
       this.ensureCapacity(maxCapacity);
-      offset += itoa_buffered(
-        changetype<usize>(this.buffer) + offset,
-        value
-      ) << 1;
     } else {
-      this.ensureCapacity(32 << 1);
-      offset += dtoa_buffered(
-        changetype<usize>(this.buffer) + offset,
-        value
-      ) << 1;
+      this.ensureCapacity(32);
     }
+    store<T>(changetype<usize>(this.buffer) + offset, value);
     this.offset = offset;
   }
 
@@ -141,14 +91,14 @@ export class StringSink {
     if (clear) this.offset = 0;
     this.buffer = changetype<ArrayBuffer>(__renew(
       changetype<usize>(this.buffer),
-      max<u32>(this.offset, max<u32>(MIN_BUFFER_SIZE, <u32>capacity << 1))
+      max<usize>(this.offset, max<usize>(MIN_BUFFER_LEN, <usize>capacity))
     ));
   }
 
   shrink(): void {
     this.buffer = changetype<ArrayBuffer>(__renew(
       changetype<usize>(this.buffer),
-      max<u32>(this.offset, MIN_BUFFER_SIZE)
+      max<u32>(this.offset, MIN_BUFFER_LEN)
     ));
   }
 
@@ -156,12 +106,30 @@ export class StringSink {
     this.reserve(0, true);
   }
 
-  toString(): string {
+  toStringUTF8(): string {
     let size = this.offset;
     if (!size) return "";
-    let out = changetype<string>(__new(size, idof<string>()));
-    memory.copy(changetype<usize>(out), changetype<usize>(this.buffer), size);
-    return out;
+    return String.UTF8.decodeUnsafe(changetype<usize>(this.buffer), <usize>size);
+  }
+
+  toStringUTF16(): string {
+    let size = this.offset;
+    if (!size) return "";
+    return String.UTF16.decodeUnsafe(changetype<usize>(this.buffer), <usize>size);
+  }
+
+  toStaticArray(): StaticArray<u8> {
+    let size = this.offset;
+    if (!size) return [];
+    let buffer = new StaticArray<u8>(size);
+    memory.copy(changetype<usize>(buffer), changetype<usize>(this.buffer), <usize>size);
+    return buffer;
+  }
+
+  toBuffer(): ArrayBuffer {
+    let size = this.offset;
+    if (!size) return new ArrayBuffer(0);
+    return this.buffer.slice(0, <i32>size);
   }
 
   @inline protected ensureCapacity(deltaBytes: u32): void {
